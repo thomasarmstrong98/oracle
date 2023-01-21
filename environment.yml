@@ -1,0 +1,15 @@
+name: oracle
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - pip
+  - pytorch
+  - numpy
+  - numba
+  - matplotlib
+  - pandas
+  - scikit-learn
+  - pytorch
+  - xgboost
+  - scipy

@@ -47,5 +47,8 @@ dist/**
 *.nls.*.json
 *.i18n.json
 
-# ignore the research data folder
-oracle/research/data/
+# ignore the data
+data/dota.pickle
+
+# ignore my prototyping folder
+prototyping/

@@ -1,15 +1,16 @@
+from pathlib import Path
+
 import numpy as np
 
+import oracle
+
+DATA_DIRECTORY = Path(oracle.__file__).parents[1] / "data"
+CONFIG_DIRECTORY = Path(oracle.__file__).parents[1] / "configs"
+
 #  skip 24 and 108
-DOTA_HERO_IDS_IN_DATASET = (
-    list(range(1, 24)) + list(range(25, 108)) + list(range(109, 115))
-)
-DOTA_HERO_ID_TO_INDEX_MAPPING = {
-    val: idx for idx, val in enumerate(DOTA_HERO_IDS_IN_DATASET)
-}
-DOTA_HERO_INDEX_TO_ID_MAPPING = {
-    idx: _id for _id, idx in DOTA_HERO_ID_TO_INDEX_MAPPING.items()
-}
+DOTA_HERO_IDS_IN_DATASET = list(range(1, 24)) + list(range(25, 108)) + list(range(109, 115))
+DOTA_HERO_ID_TO_INDEX_MAPPING = {val: idx for idx, val in enumerate(DOTA_HERO_IDS_IN_DATASET)}
+DOTA_HERO_INDEX_TO_ID_MAPPING = {idx: _id for _id, idx in DOTA_HERO_ID_TO_INDEX_MAPPING.items()}
 NUM_HEROES = len(DOTA_HERO_IDS_IN_DATASET)
 
 

@@ -5,7 +5,6 @@ channels:
 dependencies:
   - python=3.10
   - pip
-  - pytorch
   - numpy
   - numba
   - matplotlib
@@ -15,5 +14,6 @@ dependencies:
   - xgboost
   - scipy
   - pip:
+      - torch
       - black
       - flake8

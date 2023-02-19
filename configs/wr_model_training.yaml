@@ -1,0 +1,16 @@
+input_feature_dimensions: 126  # (draft encoding + embeddings)
+
+# operational configs
+use_gpu: True
+model_save_directory: "models"
+name: "win-rate-model"
+run_number: 0
+
+# training/validation configs
+binary_training_objective: "cross_entropy"
+epochs: 30
+early_stopping_rounds: 15
+training_batch_size: 500
+validation_batch_size: 1_000
+learning_rate: 0.001
+weight_decay_coef: 0.01

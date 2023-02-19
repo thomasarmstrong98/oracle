@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 from scipy import sparse
@@ -8,91 +7,75 @@ from sklearn.model_selection import train_test_split
 
 
 def split_and_shuffle_dataset(
-    path_to_sparse_design_matrix: Path,
-    path_to_match_outcomes: Path,
+    path_to_numpy_dataset: Path,
     directory_for_output: Path,
 ) -> None:
     """Quick method to open and split the large design matrix into
     train, val, test.
     """
-    X = sparse.load_npz(path_to_sparse_design_matrix)
-    y = np.load(path_to_match_outcomes)
+    dset = np.load(path_to_numpy_dataset, allow_pickle=True)
+    X, y, feature_names = dset["X"], dset["y"], dset["feature_names"]
 
     n = len(X)
     assert n == len(y)
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, 0.3, shuffle=True)
-    X_val, X_test, y_val, y_test = train_test_split(X_test, y_test, 0.3, shuffle=True)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=True)
+    X_val, X_test, y_val, y_test = train_test_split(X_test, y_test, test_size=0.3, shuffle=True)
 
     # ugly but this is too much data to return to memory so save locally first
-    sparse.save_npz(directory_for_output / "X_train", X_train)
-    sparse.save_npz(directory_for_output / "X_test", X_test)
-    sparse.save_npz(directory_for_output / "X_val", X_val)
-
-    np.save(directory_for_output / "y_train", y_train)
-    np.save(directory_for_output / "y_test", y_test)
-    np.save(directory_for_output / "y_val", y_val)
-
-
-@dataclass
-class ModelDataset:
-    """Object for storing data used to train some win-rate models."""
-
-    X_train: sparse.csr_matrix
-    y_train: np.ndarray
-
-    X_val: sparse.csr_matrix
-    y_val: np.ndarray
-
-    X_test: Optional[sparse.csr_matrix] = None
-    y_test: Optional[np.ndarray] = None
+    np.savez(
+        directory_for_output / "train",
+        X=X_train,
+        y=y_train,
+        feature_names=feature_names,
+        allow_pickle=True,
+    )
+    np.savez(
+        directory_for_output / "test",
+        X=X_test,
+        y=y_test,
+        feature_names=feature_names,
+        allow_pickle=True,
+    )
+    np.savez(
+        directory_for_output / "val",
+        X=X_val,
+        y=y_val,
+        feature_names=feature_names,
+        allow_pickle=True,
+    )
 
 
 class DatasetLoader:
     def __init__(
         self,
         directory_to_data: Path,
-        subsample: bool = True,
-        subsample_probability: float = 0.2,
-        return_test_data: bool = False,
     ) -> None:
-        self.local_path_to_data = directory_to_data
-        self.subsample = subsample
-        self.subsample_prob = subsample_probability
-        self.return_test_data = return_test_data
-
-        # hardcoded local dir structure
-        self.directory_structure = {
-            "train": ("X_train.npz", "y_train.npy"),
-            "val": ("X_val.npz", "y_val.npy"),
-            "test": ("X_test.npz", "y_test.npy"),
-        }
+        self.directory_to_data = directory_to_data
 
     def _subsample(
-        self, X: sparse.csr_matrix, y: np.ndarray
-    ) -> Tuple[sparse.csr_matrix, np.ndarray]:
+        self, X: np.ndarray, y: np.ndarray, subsample_probability: float = 0.2
+    ) -> Tuple[np.ndarray, np.ndarray]:
         n = len(X)
-        indicies = np.random.choice(n, int(self.subsample_prob * n))
+        indicies = np.random.choice(n, int(subsample_probability * n))
         return X[indicies], y[indicies]
 
-    def load(self) -> ModelDataset:
+    def load(
+        self,
+        dataset: str = "train",
+        subsample_probability: Optional[float] = None,
+        return_variable_names: Optional[bool] = False,
+    ) -> Dict[str, np.ndarray]:
         """Cheap method to load in and subsample the data we would like from disk"""
-        X_train = sparse.load_npz(self.local_path_to_data / "X_train.npz")
-        y_train = np.load(self.local_path_to_data / "y_train")
-        if self.subsample:
-            X_train, y_train = self._subsample(X_train, y_train)
 
-        X_val = sparse.load_npz(self.local_path_to_data / "X_val.npz")
-        y_val = np.load(self.local_path_to_data / "y_val.npy")
-        if self.subsample:
-            X_val, y_val = self._subsample(X_val, y_val)
+        dataset = np.load(self.directory_to_data / f"{dataset}.npz")
+        X, y = dataset["X"], dataset["y"]
 
-        if self.return_test_data:
-            X_test = sparse.load_npz(self.local_path_to_data / "X_test.npz")
-            y_test = np.load(self.local_path_to_data / "y_test.npy")
-            if self.subsample:
-                X_test, y_test = self._subsample(X_test, y_test)
+        if subsample_probability is not None:
+            X, y = self._subsample(X, y, subsample_probability)
 
-            return ModelDataset(X_train, y_train, X_val, y_val, X_test, y_test)
+        data = {"X": X, "y": y}
+        if return_variable_names:
+            data.update({"feature_names": dataset["feature_names"]})
 
-        return ModelDataset(X_train, y_train, X_val, y_val)
+        return data

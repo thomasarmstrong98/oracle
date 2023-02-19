@@ -7,10 +7,14 @@ import requests
 import pandas as pd
 import numpy as np
 
+from oracle.utils.data import DOTA_HERO_IDS_IN_DATASET
+
 OPENDOTA_HERO_STATS_QUERY = "https://api.opendota.com/api/heroStats?api_key="
 
 
-def get_opendota_hero_embedding(path_to_local: Optional[Path] = None) -> pd.DataFrame:
+def get_opendota_hero_embedding(
+    path_to_local: Optional[Path] = None, reset_ids: bool = True
+) -> pd.DataFrame:
     if path_to_local is None:
         resp = requests.get(OPENDOTA_HERO_STATS_QUERY)
         assert resp.ok
@@ -26,12 +30,23 @@ def get_opendota_hero_embedding(path_to_local: Optional[Path] = None) -> pd.Data
             axis=1,
         )
     else:
-        embedding = pd.read_pickle(path_to_local)
+        embedding = (
+            pd.read_pickle(path_to_local)
+            .loc[DOTA_HERO_IDS_IN_DATASET]
+            .reset_index(drop=True)
+        )
 
+    embedding = (
+        embedding.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True)
+        if reset_ids
+        else embedding
+    )
     return embedding
 
 
-def get_opendota_hero_stats(path_to_local: Optional[Path] = None) -> pd.DataFrame:
+def get_opendota_hero_stats(
+    path_to_local: Optional[Path] = None, reset_ids: bool = True
+) -> pd.DataFrame:
     if path_to_local is None:
         resp = requests.get(OPENDOTA_HERO_STATS_QUERY)
         assert resp.ok
@@ -39,6 +54,11 @@ def get_opendota_hero_stats(path_to_local: Optional[Path] = None) -> pd.DataFram
     else:
         hero_stats = pd.read_pickle(path_to_local)
 
+    hero_stats = (
+        hero_stats.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True)
+        if reset_ids
+        else hero_stats
+    )
     return hero_stats
 
 

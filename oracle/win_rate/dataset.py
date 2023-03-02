@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
-from scipy import sparse
 from sklearn.model_selection import train_test_split
 
 

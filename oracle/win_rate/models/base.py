@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import oracle
 from oracle.utils.data import DATA_DIRECTORY
 from oracle.utils.logger import getLogger
+from oracle.win_rate.features import BasicFeatureGenerator
 from oracle.win_rate.utils import accuracy_score
 
 
@@ -188,7 +189,7 @@ class WinRateModel:
         return loss_history, val_loss_history
 
     def predict(self, X):
-        predictions = np.argmax(self.predict_proba(X), axis=1)
+        predictions = (self.predict_proba(X) > 0.5).astype(np.int0)
 
         return predictions
 
@@ -259,3 +260,16 @@ class WinRateModel:
         :return: Copy of the current model without trained parameters
         """
         return self.__class__(self.config)
+
+
+class WinRateClassificationWrapper:
+    def __init__(
+        self, feature_generator: BasicFeatureGenerator, win_rate_model: WinRateModel
+    ) -> None:
+        self.feature_generator = feature_generator
+        self.win_rate_model = win_rate_model
+
+    def __call__(self, draft: np.ndarray) -> np.ndarray:
+        _, features = self.feature_generator(draft)
+        classification = self.win_rate_model.predict(features)
+        return classification

@@ -32,7 +32,7 @@ class Game(ABC):
         pass
 
     @abstractmethod
-    def get_final_reward(self, state: DraftState) -> float:
+    def get_reward(self, state: DraftState) -> float:
         pass
 
     @abstractmethod

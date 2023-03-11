@@ -49,6 +49,14 @@ dist/**
 
 # ignore the data
 data/dota.pickle
+data/models/
+data/win_rate_dataset.npz
+data/test.npz
+data/train.npz
+data/val.npz
 
 # ignore my prototyping folder
 prototyping/
+
+# ignore vscode stuff
+.vscode/

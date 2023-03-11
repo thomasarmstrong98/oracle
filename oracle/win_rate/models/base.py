@@ -40,7 +40,7 @@ class BasicNetModel(nn.Module):
 @dataclass
 class WinRateModelConfig:
     # model config
-    input_feature_dimensions: int = 126  # (draft encoding + embeddings)
+    input_feature_dimensions: int = 125  # (draft encoding + embeddings)
 
     # operational configs
     use_gpu: bool = True
@@ -137,7 +137,7 @@ class WinRateModel:
         val_loss_history = []
 
         self.logger.info(
-            f"Fitting model with {self.config.epochs} epochs,"
+            f"Fitting model with {self.config.epochs} epochs, "
             f"batch size of {self.config.training_batch_size} for "
             f"a dataset of {X.shape[0]} observations"
         )
@@ -273,3 +273,31 @@ class WinRateClassificationWrapper:
         _, features = self.feature_generator(draft)
         classification = self.win_rate_model.predict(features)
         return classification
+
+
+if __name__ == "__main__":
+    import numpy as np
+
+    from oracle.utils.load import get_opendota_hero_embedding
+
+    # win rate model
+    model_config = WinRateModelConfig()
+    base_model = WinRateModel(model_config)
+    base_model.load_model()
+
+    # feature generator for model
+    feature_generator = BasicFeatureGenerator(get_opendota_hero_embedding())
+
+    # pipeline wrapper
+    wr_model = WinRateClassificationWrapper(
+        feature_generator=feature_generator, win_rate_model=base_model
+    )
+
+    test_draft = np.zeros((112, 1))
+    choices = np.random.choice(112, 10, replace=False)
+    test_draft[choices[:5]] = +1
+    test_draft[choices[:5]] = -1
+
+    x = wr_model(test_draft.T)
+
+    print(x)

@@ -3,7 +3,6 @@ from typing import Tuple, TypeAlias
 import numpy as np
 import pandas as pd
 
-
 FeatureNames: TypeAlias = np.ndarray
 Features: TypeAlias = np.ndarray
 

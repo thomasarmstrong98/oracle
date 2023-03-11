@@ -143,7 +143,7 @@ class BasicDraft(Game):
             float: win prediction
         """
         draft = state.draft
-        return self.reward_model(draft)
+        return self.reward_model(draft.reshape(-1, 1).T)
 
     def get_reward(self, state: DraftState) -> float:
         """Get reward given a state, perform inference if terminated.

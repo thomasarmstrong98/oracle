@@ -1,4 +1,4 @@
-input_feature_dimensions: 126  # (draft encoding + embeddings)
+input_feature_dimensions: 125  # (draft encoding + embeddings)
 
 # operational configs
 use_gpu: True

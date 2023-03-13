@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Callable, Optional, Tuple
 
 import numpy as np
+from numba import jit
 
 from oracle.drafting.game import DraftState, Game
 from oracle.utils.data import NUM_HEROES
@@ -12,7 +13,7 @@ from oracle.utils.data import NUM_HEROES
 EPS = 1e-8
 
 
-def random_policy(draft_state: DraftState) -> np.ndarray:
+def random_policy(game: Game, draft_state: DraftState) -> np.ndarray:
     """Random rollout policy
 
     Args:
@@ -21,7 +22,7 @@ def random_policy(draft_state: DraftState) -> np.ndarray:
     Returns:
         np.ndarray: Output policy
     """
-    return np.ones(NUM_HEROES) / NUM_HEROES
+    return np.ones(game.get_action_size()) / game.get_action_size()
 
 
 class BaseMCTS(ABC):
@@ -77,13 +78,16 @@ class BaseMCTS(ABC):
             start_node = self.game.get_start_node()
 
         if self.search_stop_criterion == "time":
+            count = 0
             timeLimit = time.time() + self.search_stop_threshold
             while time.time() < timeLimit:
                 self.search(start_node)
+                count += 1
         else:
             for _ in range(self.search_stop_threshold):
                 self.search(start_node)
 
+        print(f"performed {count} loops")
         if return_action_policy:
             return self.get_action_policy(start_node)
 
@@ -148,15 +152,52 @@ class BaseMCTS(ABC):
         return self.game.take_action(state, best_action), best_action
 
 
+class AggregatorClassicMCTS:
+    """Class for aggregating multiple multiprocessed MCTS runs."""
+
+    def __init__(
+        self,
+        drafting_game: Game,
+        parrallel_trees: int,
+        rollout_policy: Callable[[Game, DraftState], np.ndarray],
+        search_stop_criterion: str = "time",
+        search_time_threshold_seconds: int = 60 * 10,
+        search_number_of_simulations: int = 1_000,
+        cpuct: float = 0.1,
+    ) -> None:
+        """Initialise Classic MCTS Algorithm
+
+        Args:
+            drafting_game (Game): Game to search
+            rollout_policy (Callable[[DraftState], np.ndarray]): Rollout policy for simulation
+            search_stop_criterion (str, optional): Whether to use time of number of simulations. Defaults to "time".
+            search_time_threshold_seconds (int, optional): Defaults to 60*3.
+            search_number_of_simulations (int, optional): Defaults to 1_000.
+            cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
+        """
+        self.parrallel_trees = parrallel_trees
+        self.tree_params = {
+            "drafting_game": drafting_game,
+            "rollout_policy": rollout_policy,
+            "search_stop_criterion": search_stop_criterion,
+            "search_time_threshold_seconds": search_time_threshold_seconds,
+            "search_number_of_simulations": search_number_of_simulations,
+            "cpuct": cpuct,
+        }
+
+    def batch_run(self):
+        pass
+
+
 class ClassicMCTS(BaseMCTS):
     """Classical Monte Carlo Tree Search Algorithm"""
 
     def __init__(
         self,
         drafting_game: Game,
-        rollout_policy: Callable[[DraftState], np.ndarray],
+        rollout_policy: Callable[[Game, DraftState], np.ndarray],
         search_stop_criterion: str = "time",
-        search_time_threshold_seconds: int = 60 * 3,
+        search_time_threshold_seconds: int = 60 * 5,
         search_number_of_simulations: int = 1_000,
         cpuct: float = 0.1,
     ) -> None:
@@ -192,12 +233,11 @@ class ClassicMCTS(BaseMCTS):
 
         s = self.game.get_string_representation(current_draft)
 
-        if s not in self.Es:
+        if self.game.is_game_terminated(current_draft):
             self.Es[s] = self.game.get_reward(current_draft)
-
-        if self.Es[s] != 0:
-            # terminal node
             return -self.Es[s]
+        else:
+            self.Es[s] = 0.0
 
         if s not in self.Ps:
             # leaf node of game tree, perform rollout
@@ -208,7 +248,7 @@ class ClassicMCTS(BaseMCTS):
             # flag for performing rollout or UCT is just self.Ps
 
             # get rollout policy from state
-            self.Ps[s] = self.rollout_policy(current_draft)
+            self.Ps[s] = self.rollout_policy(self.game, current_draft)
             valid_actions = self.game.get_valid_actions(current_draft)
             self.Ps[s] = self.Ps[s] * valid_actions
             norm = np.sum(self.Ps[s])
@@ -217,7 +257,7 @@ class ClassicMCTS(BaseMCTS):
             self.Cs[s] = valid_actions
             self.Ns[s] = 0  # leaf node has been visited
 
-            action = np.random.choice(len(self.Ps[s]), 1, p=self.Ps[s])
+            action = np.random.choice(len(self.Ps[s]), p=self.Ps[s])
 
             next_state = self.game.take_action(current_draft, action)
             return -self.search(next_state)
@@ -235,13 +275,15 @@ class ClassicMCTS(BaseMCTS):
                     )
 
                 else:
-                    u = self.cpuct * self.Ps[s][a] * math.sqrt(self.Ns[s] + EPS)  # Q = 0 ?
-
+                    u = 1.0 + self.cpuct * self.Ps[s][a] * math.sqrt(
+                        self.Ns[s]
+                    )  # Over optimistic start
                 if u > current_best:
                     current_best = u
                     best_action = a
 
         a = best_action
+        assert a is not None
         next_state = self.game.take_action(current_draft, a)
         v = self.search(next_state)
 

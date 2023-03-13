@@ -15,32 +15,42 @@ from oracle.win_rate.features import BasicFeatureGenerator
 from oracle.win_rate.utils import accuracy_score
 
 
-class BasicNetModel(nn.Module):
+class DeepNetModel(nn.Module):
     def __init__(self, feature_number: int) -> None:
         super().__init__()
         self.feature_number = feature_number
 
-        self.l1 = nn.Sequential(nn.Linear(self.feature_number, 25), nn.Tanh())
-        self.l2 = nn.Sequential(nn.Linear(25, 300), nn.LeakyReLU(negative_slope=0.2))
-        self.l3 = nn.Sequential(
-            nn.Linear(300, 75),
-            nn.LeakyReLU(negative_slope=0.2),
-        )
-        self.final = nn.Linear(25 + 300 + 75, 1)
+        self.l1 = nn.Sequential(nn.Linear(self.feature_number, 5_000), nn.Tanh())
+        self.l2 = nn.Sequential(nn.Linear(5_000, 3_000), nn.LeakyReLU(negative_slope=0.2))
+        # self.l3 = nn.Sequential(
+        #     nn.Linear(3_000, 75),
+        #     nn.LeakyReLU(negative_slope=0.2),
+        # )
+        self.final = nn.Linear(5_000 + 3_000, 1)
 
     def forward(self, x):
         l1 = self.l1(x)
         l2 = self.l2(l1)
-        l3 = self.l3(l2)
+        # l3 = self.l3(l2)
 
-        out = self.final(torch.concat((l1, l2, l3), axis=1)).flatten()
+        out = self.final(torch.concat((l1, l2), axis=1)).flatten()
         return out
+
+
+class LogisticRegressionModel(nn.Module):
+    def __init__(self, feature_number: int) -> None:
+        super().__init__()
+        self.feature_number = feature_number
+        self.l = nn.Linear(self.feature_number, 1)
+
+    def forward(self, x: torch.TensorType) -> torch.TensorType:
+        return self.l(x).flatten()
 
 
 @dataclass
 class WinRateModelConfig:
     # model config
-    input_feature_dimensions: int = 125  # (draft encoding + embeddings)
+    input_feature_dimensions: int = 126  # (draft encoding + embeddings)
 
     # operational configs
     use_gpu: bool = True
@@ -85,7 +95,7 @@ class WinRateModel:
 
         self.device = self.get_device()
 
-        self.model = BasicNetModel(self.config.input_feature_dimensions)
+        self.model = DeepNetModel(self.config.input_feature_dimensions)
         self.to_device()
 
     def to_device(self):
@@ -188,12 +198,16 @@ class WinRateModel:
 
         return loss_history, val_loss_history
 
-    def predict(self, X):
-        predictions = (self.predict_proba(X) > 0.5).astype(np.int0)
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        if X.shape[0] == 1:
+            # single draft observation, use more peformant inference
+            prediction = self.predict_proba_single_observation(X)
+        else:
+            prediction = self.predict_proba(X)
 
-        return predictions
+        return 2 * ((prediction > 0.5).astype(np.float16)) - 1.0
 
-    def probabilistic_predict(self, X):
+    def probabilistic_predict(self, X: np.ndarray) -> np.ndarray:
         probabilities = self.predict_proba(X)
         # randomly simulate if we assign 0/1 based on probability.
         random_samples = np.random.rand(probabilities.shape[0])
@@ -205,6 +219,12 @@ class WinRateModel:
 
         return probas
 
+    def predict_proba_single_observation(self, X: np.ndarray) -> np.ndarray:
+        with torch.no_grad():
+            preds = self.model(torch.Tensor(X).to(self.device))
+            preds = torch.sigmoid(preds)
+            return preds.detach().cpu().numpy()
+
     def predict_helper(self, X: np.ndarray):
         self.model.eval()
 
@@ -214,7 +234,7 @@ class WinRateModel:
             dataset=test_dataset,
             batch_size=self.config.validation_batch_size,
             shuffle=False,
-            num_workers=2,
+            num_workers=5,
         )
         predictions = []
         with torch.no_grad():
@@ -273,31 +293,3 @@ class WinRateClassificationWrapper:
         _, features = self.feature_generator(draft)
         classification = self.win_rate_model.predict(features)
         return classification
-
-
-if __name__ == "__main__":
-    import numpy as np
-
-    from oracle.utils.load import get_opendota_hero_embedding
-
-    # win rate model
-    model_config = WinRateModelConfig()
-    base_model = WinRateModel(model_config)
-    base_model.load_model()
-
-    # feature generator for model
-    feature_generator = BasicFeatureGenerator(get_opendota_hero_embedding())
-
-    # pipeline wrapper
-    wr_model = WinRateClassificationWrapper(
-        feature_generator=feature_generator, win_rate_model=base_model
-    )
-
-    test_draft = np.zeros((112, 1))
-    choices = np.random.choice(112, 10, replace=False)
-    test_draft[choices[:5]] = +1
-    test_draft[choices[:5]] = -1
-
-    x = wr_model(test_draft.T)
-
-    print(x)

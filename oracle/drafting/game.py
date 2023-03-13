@@ -39,13 +39,17 @@ class Game(ABC):
     def get_start_node(self) -> DraftState:
         pass
 
+    @abstractmethod
+    def is_game_terminated(self, state: DraftState) -> bool:
+        pass
+
 
 class BasicDraft(Game):
     """Basic DOTA2 Drafting Game
 
     Does not include drafting schedule, picks and bans."""
 
-    def __init__(self, reward_model: Callable[[np.ndarray], float]) -> None:
+    def __init__(self, reward_model: Callable[[np.ndarray], np.ndarray]) -> None:
         """Initialise Game
 
         Args:
@@ -143,7 +147,7 @@ class BasicDraft(Game):
             float: win prediction
         """
         draft = state.draft
-        return self.reward_model(draft.reshape(-1, 1).T)
+        return self.reward_model(draft.reshape(-1, 1).T)[0]
 
     def get_reward(self, state: DraftState) -> float:
         """Get reward given a state, perform inference if terminated.

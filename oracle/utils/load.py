@@ -1,21 +1,31 @@
-from dataclasses import dataclass
-from typing import Optional
-from pathlib import Path
 import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
 import requests
 
-import pandas as pd
-import numpy as np
+from oracle.utils.data import DATA_DIRECTORY, DOTA_HERO_IDS_IN_DATASET
+from oracle.utils.logger import getLogger
 
-from oracle.utils.data import DOTA_HERO_IDS_IN_DATASET
+logger = getLogger(__name__)
 
 OPENDOTA_HERO_STATS_QUERY = "https://api.opendota.com/api/heroStats?api_key="
+DEFAULT_PATH_TO_EMBEDDING_DATA = Path(DATA_DIRECTORY / "hero_embedding.pickle")
 
 
 def get_opendota_hero_embedding(
-    path_to_local: Optional[Path] = None, reset_ids: bool = True
+    path_to_local: Optional[Path] = DEFAULT_PATH_TO_EMBEDDING_DATA,
+    reset_ids: bool = True,
+    use_local: bool = True,
 ) -> pd.DataFrame:
-    if path_to_local is None:
+    if not use_local:
+        logger.warning(
+            "Since project creation, certain embedding features have been deleted/changed. "
+            "Highly recommended to use provided data."
+        )
         resp = requests.get(OPENDOTA_HERO_STATS_QUERY)
         assert resp.ok
         hero_stats = pd.DataFrame(json.loads(resp.content)).set_index("id")
@@ -30,16 +40,10 @@ def get_opendota_hero_embedding(
             axis=1,
         )
     else:
-        embedding = (
-            pd.read_pickle(path_to_local)
-            .loc[DOTA_HERO_IDS_IN_DATASET]
-            .reset_index(drop=True)
-        )
+        embedding = pd.read_pickle(path_to_local)
 
     embedding = (
-        embedding.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True)
-        if reset_ids
-        else embedding
+        embedding.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True) if reset_ids else embedding
     )
     return embedding
 
@@ -55,9 +59,7 @@ def get_opendota_hero_stats(
         hero_stats = pd.read_pickle(path_to_local)
 
     hero_stats = (
-        hero_stats.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True)
-        if reset_ids
-        else hero_stats
+        hero_stats.loc[DOTA_HERO_IDS_IN_DATASET].reset_index(drop=True) if reset_ids else hero_stats
     )
     return hero_stats
 

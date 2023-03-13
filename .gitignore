@@ -55,8 +55,11 @@ data/test.npz
 data/train.npz
 data/val.npz
 
-# ignore my prototyping folder
+#  my prototyping folder
 prototyping/
 
-# ignore vscode stuff
+# profiling files
+*.prof
+
+# extra vscode stuff
 .vscode/

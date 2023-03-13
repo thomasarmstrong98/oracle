@@ -4,9 +4,7 @@ from logging.config import dictConfig
 
 logging_config = dict(
     version=1,
-    formatters={
-        "f": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
-    },
+    formatters={"f": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}},
     handlers={
         "h": {
             "class": "logging.StreamHandler",
@@ -21,7 +19,7 @@ logging_config = dict(
         },
         "__main__": {  # if __name__ == '__main__'
             "handlers": ["h"],
-            "level": "INFO",
+            "level": "DEBUG",
             "propagate": False,
         },
     },

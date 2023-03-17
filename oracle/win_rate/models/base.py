@@ -20,20 +20,26 @@ class DeepNetModel(nn.Module):
         super().__init__()
         self.feature_number = feature_number
 
-        self.l1 = nn.Sequential(nn.Linear(self.feature_number, 5_000), nn.Tanh())
-        self.l2 = nn.Sequential(nn.Linear(5_000, 3_000), nn.LeakyReLU(negative_slope=0.2))
-        # self.l3 = nn.Sequential(
-        #     nn.Linear(3_000, 75),
-        #     nn.LeakyReLU(negative_slope=0.2),
-        # )
-        self.final = nn.Linear(5_000 + 3_000, 1)
+        self.l1_size = 3_000
+        self.l2_size = 5_000
+        self.l3_size = 75
+
+        self.l1 = nn.Sequential(nn.Linear(self.feature_number, self.l1_size), nn.Tanh())
+        self.l2 = nn.Sequential(
+            nn.Linear(self.l1_size, self.l2_size), nn.LeakyReLU(negative_slope=0.2)
+        )
+        self.l3 = nn.Sequential(
+            nn.Linear(self.l2_size, self.l3_size),
+            nn.LeakyReLU(negative_slope=0.2),
+        )
+        self.final = nn.Linear(self.l1_size + self.l2_size + self.l3_size, 1)
 
     def forward(self, x):
         l1 = self.l1(x)
         l2 = self.l2(l1)
-        # l3 = self.l3(l2)
+        l3 = self.l3(l2)
 
-        out = self.final(torch.concat((l1, l2), axis=1)).flatten()
+        out = self.final(torch.concat((l1, l2, l3), axis=1)).flatten()
         return out
 
 
@@ -59,14 +65,17 @@ class WinRateModelConfig:
     run_number: int = 0
 
     # training/validation configs
-    binary_training_objective: str = "cross_entropy"
+    transform_prediction_for_reward: bool = True
     epochs: int = 3
-    early_stopping_rounds: int = 3
+    early_stopping_rounds: int = 10
     training_batch_size: int = 100
     validation_batch_size: int = 1_000
     learning_rate: float = 1e-3
-    weight_decay_coef: float = 1e-3
+    weight_decay_coef: float = 1e-2
     evaluation_function: str = "accuracy_score"
+    use_scheduler: bool = True
+    scheduler_min_learn_rate: float = 1e-8
+    scheduler_patience: int = 5
 
     @classmethod
     def load_from_yaml(cls, path_to_yaml: Path):
@@ -113,15 +122,26 @@ class WinRateModel:
 
     def fit(self, X, y, X_val=None, y_val=None):
         validation = X_val is not None
-        optimizer = optim.AdamW(self.model.parameters(), lr=self.config.learning_rate)
+        optimizer = optim.Adamax(
+            self.model.parameters(),
+            lr=self.config.learning_rate,
+            weight_decay=self.config.weight_decay_coef,
+        )
+        scheduler = (
+            optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="max",
+                min_lr=self.config.scheduler_min_learn_rate,
+                patience=self.config.scheduler_patience,
+            )
+            if self.config.use_scheduler
+            else None
+        )
 
         X = torch.tensor(X).float()
         y = torch.tensor(y).float()
 
-        if self.config.binary_training_objective == "negative_log_likelihood":
-            loss_func = nn.NLLLoss()
-        else:
-            loss_func = nn.CrossEntropyLoss()
+        loss_func = nn.CrossEntropyLoss()
 
         train_dataset = TensorDataset(X, y)
         train_loader = DataLoader(
@@ -153,45 +173,51 @@ class WinRateModel:
         )
 
         for epoch in range(self.config.epochs):
-            for i, (batch_X, batch_y) in enumerate(train_loader):
+            for batch_num, (batch_X, batch_y) in enumerate(train_loader):
 
-                out = self.model(batch_X.to(self.device))
+                pred = self.model(batch_X.to(self.device))
 
-                loss = loss_func(out, batch_y.to(self.device))
+                loss = loss_func(pred, batch_y.to(self.device))
                 loss_history.append(loss.item())
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-            if validation:
-                # Early Stopping
-                val_loss = 0.0
-                val_dim = 0
-                for val_i, (batch_val_X, batch_val_y) in enumerate(val_loader):
-                    out = self.model(batch_val_X.to(self.device))
+                if validation and batch_num % 500:
+                    # Early Stopping
+                    val_loss = 0.0
+                    val_dim = 0
 
-                    val_loss += loss_func(out, batch_val_y.to(self.device))
-                    val_dim += 1
+                    with torch.no_grad():
+                        for val_i, (batch_val_X, batch_val_y) in enumerate(val_loader):
+                            pred = self.model(batch_val_X.to(self.device))
 
-                val_loss /= val_dim
-                val_loss_history.append(val_loss.item())
+                            val_loss += loss_func(pred, batch_val_y.to(self.device))
+                            val_dim += 1
 
-                self.logger.debug(f"Epoch {epoch}: Validation Loss: {val_loss:.5f}")
+                        val_loss /= val_dim
+                        val_loss_history.append(val_loss.item())
 
-                if val_loss < min_val_loss:
-                    min_val_loss = val_loss
-                    min_val_loss_idx = epoch
+                        if scheduler is not None:
+                            scheduler.step(val_loss)
 
-                    # Save the currently best model
-                    self.save_model("best")
+                        self.logger.debug(f"Epoch {epoch}: Validation Loss: {val_loss:.5f}")
 
-                if min_val_loss_idx + self.config.early_stopping_rounds < epoch:
-                    self.logger.info(
-                        f"Validation loss has not improved for {self.config.early_stopping_rounds} steps."
-                    )
-                    self.logger.info("Applying early stopping")
-                    break
+                        if val_loss < min_val_loss:
+                            min_val_loss = val_loss
+                            min_val_loss_idx = epoch
+
+                            # Save the currently best model
+                            self.save_model("best")
+
+                        if min_val_loss_idx + self.config.early_stopping_rounds < epoch:
+                            self.logger.info(
+                                f"Validation loss has not improved for {self.config.early_stopping_rounds} steps."
+                            )
+                            self.logger.info("Applying early stopping")
+                            break
+
         if validation:
             # Load best model
             self.load_model(filename="best")
@@ -205,7 +231,13 @@ class WinRateModel:
         else:
             prediction = self.predict_proba(X)
 
-        return 2 * ((prediction > 0.5).astype(np.float16)) - 1.0
+        prediction = (
+            self._transform_prediction_for_reward(prediction)
+            if self.config.transform_prediction_for_reward
+            else prediction
+        )
+
+        return prediction
 
     def probabilistic_predict(self, X: np.ndarray) -> np.ndarray:
         probabilities = self.predict_proba(X)
@@ -222,7 +254,7 @@ class WinRateModel:
     def predict_proba_single_observation(self, X: np.ndarray) -> np.ndarray:
         with torch.no_grad():
             preds = self.model(torch.Tensor(X).to(self.device))
-            preds = torch.sigmoid(preds)
+            preds = (preds > 0.5).float()
             return preds.detach().cpu().numpy()
 
     def predict_helper(self, X: np.ndarray):
@@ -240,7 +272,8 @@ class WinRateModel:
         with torch.no_grad():
             for batch_X in test_loader:
                 preds = self.model(batch_X[0].to(self.device))
-                preds = torch.sigmoid(preds)  # binary classification
+                # preds = torch.sigmoid(preds) > 0.0  # binary classification
+                preds = (preds > 0.5).float()
                 predictions.append(preds.detach().cpu().numpy())
 
         return np.concatenate(predictions)
@@ -253,6 +286,9 @@ class WinRateModel:
         eval_score = accuracy_score(y, predictions)
 
         return eval_score
+
+    def _transform_prediction_for_reward(self, prediction: np.ndarray):
+        return 2 * (prediction) - 1
 
     def save_model(self, filename: str = "win_rate_model") -> None:
         path = self.get_save_path(filename)

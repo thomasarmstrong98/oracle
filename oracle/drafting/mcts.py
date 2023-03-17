@@ -2,13 +2,12 @@
 import math
 import time
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Tuple
+from multiprocessing import Pool
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-from numba import jit
 
 from oracle.drafting.game import DraftState, Game
-from oracle.utils.data import NUM_HEROES
 
 EPS = 1e-8
 
@@ -54,6 +53,7 @@ class BaseMCTS(ABC):
         self.game = drafting_game
         self.cpuct = cpuct
 
+        # data from graph exploring
         self.Qsa = dict()  # Q values for each (state, action)
         self.Nsa = dict()  # num. times (state, action) visited
         self.Ns = dict()  # num. times state was visited
@@ -151,42 +151,32 @@ class BaseMCTS(ABC):
 
         return self.game.take_action(state, best_action), best_action
 
-
-class AggregatorClassicMCTS:
-    """Class for aggregating multiple multiprocessed MCTS runs."""
-
-    def __init__(
+    def set_data(
         self,
-        drafting_game: Game,
-        parrallel_trees: int,
-        rollout_policy: Callable[[Game, DraftState], np.ndarray],
-        search_stop_criterion: str = "time",
-        search_time_threshold_seconds: int = 60 * 10,
-        search_number_of_simulations: int = 1_000,
-        cpuct: float = 0.1,
-    ) -> None:
-        """Initialise Classic MCTS Algorithm
+        Qsa: Dict[Tuple[str, int], float],
+        Nsa: Dict[Tuple[str, int], int],
+        Ns: Dict[str, int],
+        Ps: Dict[str, np.ndarray],
+        Es: Dict[str, float],
+        Cs: Dict[str, np.ndarray],
+    ):
+        """Set the graph exploration information explicity - used by aggregator MCTS class
 
         Args:
-            drafting_game (Game): Game to search
-            rollout_policy (Callable[[DraftState], np.ndarray]): Rollout policy for simulation
-            search_stop_criterion (str, optional): Whether to use time of number of simulations. Defaults to "time".
-            search_time_threshold_seconds (int, optional): Defaults to 60*3.
-            search_number_of_simulations (int, optional): Defaults to 1_000.
-            cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
+            Qsa (Dict[str, float]): (state, action) values
+            Nsa (Dict[str, int]): (state, action) counts
+            Ns (Dict[str, int]): state counts
+            Ps (Dict[str, np.ndarray]): state policy
+            Es (Dict[str, bool]): state terminal state info
+            Cs (Dict[str, np.ndarray]): children information
         """
-        self.parrallel_trees = parrallel_trees
-        self.tree_params = {
-            "drafting_game": drafting_game,
-            "rollout_policy": rollout_policy,
-            "search_stop_criterion": search_stop_criterion,
-            "search_time_threshold_seconds": search_time_threshold_seconds,
-            "search_number_of_simulations": search_number_of_simulations,
-            "cpuct": cpuct,
-        }
+        self.Qsa = Qsa  # Q values for each (state, action)
+        self.Nsa = Nsa  # num. times (state, action) visited
+        self.Ns = Ns  # num. times state was visited
+        self.Ps = Ps  # store initial policy
 
-    def batch_run(self):
-        pass
+        self.Es = Es  # stores if a state is ended for states
+        self.Cs = Cs
 
 
 class ClassicMCTS(BaseMCTS):
@@ -298,6 +288,122 @@ class ClassicMCTS(BaseMCTS):
 
         self.Ns[s] += 1
         return -v
+
+
+class AggregatorClassicMCTS:
+    """Class for aggregating multiple multiprocessed MCTS runs."""
+
+    def __init__(
+        self,
+        drafting_game: Game,
+        parrallel_trees: int,
+        number_processes: int,
+        rollout_policy: Callable[[Game, DraftState], np.ndarray],
+        search_stop_criterion: str = "time",
+        search_time_threshold_seconds: int = 60 * 1,
+        search_number_of_simulations: int = 1_000,
+        cpuct: float = 0.1,
+    ) -> None:
+        """Initialise Classic MCTS Algorithm
+
+        Args:
+            drafting_game (Game): Game to search
+            rollout_policy (Callable[[DraftState], np.ndarray]): Rollout policy for simulation
+            number_processes (int): Number of processes to spawn for parrallel tree search.
+            search_stop_criterion (str, optional): Whether to use time of number of simulations. Defaults to "time".
+            search_time_threshold_seconds (int, optional): Defaults to 60*3.
+            search_number_of_simulations (int, optional): Defaults to 1_000.
+            cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
+        """
+        self.parrallel_trees = parrallel_trees
+        self.number_processes = number_processes
+        self.tree_params = {
+            "drafting_game": drafting_game,
+            "rollout_policy": rollout_policy,
+            "search_stop_criterion": search_stop_criterion,
+            "search_time_threshold_seconds": search_time_threshold_seconds,
+            "search_number_of_simulations": search_number_of_simulations,
+            "cpuct": cpuct,
+        }
+
+        self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
+
+    def batch_run(self):
+        with Pool(self.number_processes) as pool:
+            searched_trees = pool.map(multiprocess_helper_function, self.trees)
+        return self.merge_trees(searched_trees)
+
+    def merge_trees(self, searched_trees: List[ClassicMCTS]) -> ClassicMCTS:
+        """Merge data from independent tree searches into one large tree
+
+        Very unperformant code, and the merging takes a while, but the speed up with maxing out
+        all cores is worth it.
+
+        Args:
+            searched_trees (List[ClassicMCTS]): list of trees, having partially searched
+            state space
+
+        Returns:
+            ClassicMCTS: single tree, combining all info on independently ran trees.
+        """
+
+        state_action_superset = set.union(*[set(tree.Qsa.keys()) for tree in searched_trees])
+        state_superset = set.union(*[set(tree.Ns.keys()) for tree in searched_trees])
+
+        Qsa = dict()
+        Nsa = dict()
+
+        for state_action in state_action_superset:
+            Qsa[state_action], Nsa[state_action] = 0, 0
+            for tree in searched_trees:
+                if state_action in tree.Qsa:
+                    Qsa[state_action] = (
+                        Qsa[state_action] * Nsa[state_action]
+                        + tree.Qsa[state_action] * tree.Nsa[state_action]
+                    ) / (tree.Nsa[state_action] + Nsa[state_action])
+                    Nsa[state_action] += tree.Nsa[state_action]
+
+        Ns = dict()
+        Es = dict()
+        Cs = dict()
+        Ps = dict()
+
+        for state in state_superset:
+            Ns[state], Es[state], Cs[state], Ps[state] = (
+                0,
+                0,
+                np.zeros(self.tree_params["drafting_game"].get_action_size()),
+                np.zeros(self.tree_params["drafting_game"].get_action_size()),
+            )
+            for tree in searched_trees:
+                if state in tree.Ns:
+                    Es[state] = (Es[state] * Ns[state] + tree.Es[state] * tree.Ns[state]) / (
+                        Ns[state] + tree.Ns[state] + 1
+                    )
+                    Cs[state] = (Cs[state] * Ns[state] + tree.Cs[state] * tree.Ns[state]) / (
+                        Ns[state] + tree.Ns[state] + 1
+                    )
+                    Ps[state] = (Ps[state] * Ns[state] + tree.Ps[state] * tree.Ns[state]) / (
+                        Ns[state] + tree.Ns[state] + 1
+                    )
+                    Ns[state] += tree.Ns[state]
+
+        merged_tree = ClassicMCTS(**self.tree_params)
+        merged_tree.set_data(Qsa, Nsa, Ns, Ps, Es, Cs)
+        return merged_tree
+
+
+def multiprocess_helper_function(mcts: ClassicMCTS) -> ClassicMCTS:
+    """Helper class used for multiprocessing to avoid lambda functions
+
+    Args:
+        mcts (ClassicMCTS): tree search algorithm
+
+    Returns:
+        ClassicMCTS: tree search algorithm post search
+    """
+    _ = mcts.run()
+    return mcts
 
 
 class AlphaZeroMCTS(BaseMCTS):

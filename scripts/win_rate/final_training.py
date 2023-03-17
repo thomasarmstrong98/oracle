@@ -44,6 +44,8 @@ def main(
 
     # fit
     model.fit(X=train["X"], y=train["y"])
+
+    # model.load_model("testing")
     logger.debug("fit model")
     train_accuracy = model.evaluate(train["X"], train["y"])
 

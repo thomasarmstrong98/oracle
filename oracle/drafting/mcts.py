@@ -290,6 +290,20 @@ class ClassicMCTS(BaseMCTS):
         return -v
 
 
+def multiprocess_helper_function(mcts: ClassicMCTS, start_node: DraftState) -> ClassicMCTS:
+    """Helper class used for multiprocessing to avoid lambda functions
+
+    Args:
+        mcts (ClassicMCTS): tree search algorithm
+        start_node (DraftState): Node to start search from
+
+    Returns:
+        ClassicMCTS: tree search algorithm post search
+    """
+    _ = mcts.run(start_node)
+    return mcts
+
+
 class AggregatorClassicMCTS:
     """Class for aggregating multiple multiprocessed MCTS runs."""
 
@@ -328,13 +342,28 @@ class AggregatorClassicMCTS:
 
         self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
 
-    def batch_run(self):
-        with Pool(self.number_processes) as pool:
-            searched_trees = pool.map(multiprocess_helper_function, self.trees)
-        return self.merge_trees(searched_trees)
+        # define a base tree, so that the aggregator can expose the same functionality.
+        self.base_tree = ClassicMCTS(**self.tree_params)
 
-    def merge_trees(self, searched_trees: List[ClassicMCTS]) -> ClassicMCTS:
-        """Merge data from independent tree searches into one large tree
+    def run(
+        self, start_node: Optional[DraftState] = None, return_action_policy: Optional[bool] = False
+    ) -> Optional[np.ndarray]:
+
+        if start_node is None:
+            start_node = self.tree_params["drafting_game"].get_start_node()
+
+        with Pool(self.number_processes) as pool:
+            searched_trees = pool.starmap(
+                multiprocess_helper_function, zip(self.trees, [start_node] * len(self.trees))
+            )
+
+        self.merge_trees(searched_trees)
+
+        if return_action_policy:
+            return self.base_tree.get_action_policy(state=start_node)
+
+    def merge_trees(self, searched_trees: List[ClassicMCTS]) -> None:
+        """Merge data from independent tree searches into the large base tree
 
         Very unperformant code, and the merging takes a while, but the speed up with maxing out
         all cores is worth it.
@@ -342,68 +371,51 @@ class AggregatorClassicMCTS:
         Args:
             searched_trees (List[ClassicMCTS]): list of trees, having partially searched
             state space
-
-        Returns:
-            ClassicMCTS: single tree, combining all info on independently ran trees.
         """
 
         state_action_superset = set.union(*[set(tree.Qsa.keys()) for tree in searched_trees])
         state_superset = set.union(*[set(tree.Ns.keys()) for tree in searched_trees])
 
-        Qsa = dict()
-        Nsa = dict()
-
         for state_action in state_action_superset:
-            Qsa[state_action], Nsa[state_action] = 0, 0
+            if state_action not in self.base_tree.Qsa:
+                self.base_tree.Qsa[state_action], self.base_tree.Nsa[state_action] = 0, 0
             for tree in searched_trees:
                 if state_action in tree.Qsa:
-                    Qsa[state_action] = (
-                        Qsa[state_action] * Nsa[state_action]
+                    self.base_tree.Qsa[state_action] = (
+                        self.base_tree.Qsa[state_action] * self.base_tree.Nsa[state_action]
                         + tree.Qsa[state_action] * tree.Nsa[state_action]
-                    ) / (tree.Nsa[state_action] + Nsa[state_action])
-                    Nsa[state_action] += tree.Nsa[state_action]
-
-        Ns = dict()
-        Es = dict()
-        Cs = dict()
-        Ps = dict()
+                    ) / (tree.Nsa[state_action] + self.base_tree.Nsa[state_action])
+                    self.base_tree.Nsa[state_action] += tree.Nsa[state_action]
 
         for state in state_superset:
-            Ns[state], Es[state], Cs[state], Ps[state] = (
-                0,
-                0,
-                np.zeros(self.tree_params["drafting_game"].get_action_size()),
-                np.zeros(self.tree_params["drafting_game"].get_action_size()),
-            )
+            if state not in self.base_tree.Ns:
+                (
+                    self.base_tree.Ns[state],
+                    self.base_tree.Es[state],
+                    self.base_tree.Cs[state],
+                    self.base_tree.Ps[state],
+                ) = (
+                    0,
+                    0,
+                    np.zeros(self.tree_params["drafting_game"].get_action_size()),
+                    np.zeros(self.tree_params["drafting_game"].get_action_size()),
+                )
+
             for tree in searched_trees:
                 if state in tree.Ns:
-                    Es[state] = (Es[state] * Ns[state] + tree.Es[state] * tree.Ns[state]) / (
-                        Ns[state] + tree.Ns[state] + 1
-                    )
-                    Cs[state] = (Cs[state] * Ns[state] + tree.Cs[state] * tree.Ns[state]) / (
-                        Ns[state] + tree.Ns[state] + 1
-                    )
-                    Ps[state] = (Ps[state] * Ns[state] + tree.Ps[state] * tree.Ns[state]) / (
-                        Ns[state] + tree.Ns[state] + 1
-                    )
-                    Ns[state] += tree.Ns[state]
-
-        merged_tree = ClassicMCTS(**self.tree_params)
-        merged_tree.set_data(Qsa, Nsa, Ns, Ps, Es, Cs)
-        return merged_tree
-
-
-def multiprocess_helper_function(mcts: ClassicMCTS) -> ClassicMCTS:
-    """Helper class used for multiprocessing to avoid lambda functions
-
-    Args:
-        mcts (ClassicMCTS): tree search algorithm
-
-    Returns:
-        ClassicMCTS: tree search algorithm post search
-    """
-    _ = mcts.run()
-    return mcts
+                    self.base_tree.Es[state] = (
+                        self.base_tree.Es[state] * self.base_tree.Ns[state]
+                        + tree.Es[state] * tree.Ns[state]
+                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
+                    self.base_tree.Cs[state] = (
+                        self.base_tree.Cs[state] * self.base_tree.Ns[state]
+                        + tree.Cs[state] * tree.Ns[state]
+                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
+                    self.base_tree.Ps[state] = (
+                        self.base_tree.Ps[state] * self.base_tree.Ns[state]
+                        + tree.Ps[state] * tree.Ns[state]
+                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
+                    self.base_tree.Ns[state] += tree.Ns[state]
 
 
 class AlphaZeroMCTS(BaseMCTS):
@@ -412,7 +424,7 @@ class AlphaZeroMCTS(BaseMCTS):
         drafting_game: Game,
         game_net: Callable[[DraftState], Tuple[np.ndarray, float]],
         search_stop_criterion: str = "time",
-        search_time_threshold_seconds: int = 60 * 3,
+        search_time_threshold_seconds: int = 60 * 1,
         search_number_of_simulations: int = 1000,
         cpuct: float = 0.1,
     ) -> None:

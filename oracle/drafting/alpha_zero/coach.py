@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
 
 from oracle.drafting.game import BasicDraft
-from oracle.drafting.mcts import AlphaZeroMCTS
+from oracle.drafting.mcts import AggregatorClassicMCTS, BaseMCTS
 
 
 @dataclass
@@ -17,11 +17,16 @@ class SelfPlayExample:
 
 
 class Coach:
-    def __init__(self, draft_game: BasicDraft, a0_nnet, num_rounds_of_self_play: int) -> None:
+    def __init__(
+        self,
+        draft_game: BasicDraft,
+        mcts: Union[AggregatorClassicMCTS, BaseMCTS],
+        tree_reset_interval: int = 10,
+    ) -> None:
         self.draft_game = draft_game
-        self.a0_nnet = a0_nnet
-        self.mcts = AlphaZeroMCTS(draft_game, a0_nnet)
-        self.num_rounds_of_self_play = num_rounds_of_self_play
+        self.mcts = mcts
+        self.tree_reset_interval = tree_reset_interval
+        self.tree_round_count = 0
 
     def selfplay_round(self) -> List[SelfPlayExample]:
         """A single round of self-play.
@@ -35,6 +40,9 @@ class Coach:
 
         while True:
             # until the game is finished
+            if self.tree_round_count == self.tree_reset_interval:
+                print("Tree has been reset!")
+                self.mcts.reset()
             pi = self.mcts.run(draft_state, return_action_policy=True)
             assert pi is not None
             train_examples.append(SelfPlayExample(draft_state.player, draft_state.draft, pi, None))
@@ -55,11 +63,23 @@ class Coach:
                     for sample in train_examples
                 ]
 
-    def learn(self):
-        training_examples = list()
+            self.tree_round_count += 1
 
-        for _ in tqdm(range(self.num_rounds_of_self_play), desc="Self play iterations."):
-            self.mcts = AlphaZeroMCTS(self.draft_game, self.a0_nnet)
-            training_examples += self.selfplay_round()
+    @classmethod
+    def convert_examples_to_numpy(
+        cls, examples: List[SelfPlayExample]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Converts a list of self-play examples to numpy arrays.
 
-        return training_examples
+        Args:
+            examples (List[SelfPlayExample]): output of self play
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: numpy array version of selfplay examples
+        """
+        players = np.asarray([example.player for example in examples])
+        drafts = np.asarray([example.draft for example in examples])
+        policies = np.asarray([example.policy for example in examples])
+        outcomes = np.asarray([example.outcome for example in examples])
+
+        return players, drafts, policies, outcomes

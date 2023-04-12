@@ -87,7 +87,6 @@ class BaseMCTS(ABC):
             for _ in range(self.search_stop_threshold):
                 self.search(start_node)
 
-        print(f"performed {count} loops")
         if return_action_policy:
             return self.get_action_policy(start_node)
 
@@ -150,6 +149,11 @@ class BaseMCTS(ABC):
         assert best_action is not None
 
         return self.game.take_action(state, best_action), best_action
+
+    def reset(self) -> None:
+        """Hard reset the data stored in the tree"""
+        empty_dict = dict()
+        self.set_data(*([empty_dict] * 6))
 
     def set_data(
         self,
@@ -359,8 +363,19 @@ class AggregatorClassicMCTS:
 
         self.merge_trees(searched_trees)
 
-        if return_action_policy:
+        if return_action_policy and start_node is not None:
             return self.base_tree.get_action_policy(state=start_node)
+
+    def reset(self):
+        """Hard reset the class
+
+        This is used for long self-play runs, when we can't store all history in memory
+
+        TODO - to avoid this problem, we can store the base tree data on disk
+        if the write/load is quick
+        """
+        self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
+        self.base_tree = ClassicMCTS(**self.tree_params)
 
     def merge_trees(self, searched_trees: List[ClassicMCTS]) -> None:
         """Merge data from independent tree searches into the large base tree

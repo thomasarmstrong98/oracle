@@ -40,7 +40,7 @@ class Coach:
 
         while True:
             # until the game is finished
-            if self.tree_round_count == self.tree_reset_interval:
+            if self.tree_round_count % self.tree_reset_interval == 0:
                 print("Tree has been reset!")
                 self.mcts.reset()
             pi = self.mcts.run(draft_state, return_action_policy=True)

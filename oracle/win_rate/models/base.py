@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -98,13 +99,16 @@ class WinRateModelConfig:
 class WinRateModel:
     """Base Model for DOTA2 draft win classification"""
 
-    def __init__(self, config: WinRateModelConfig):
+    def __init__(self, config: WinRateModelConfig, model: Optional[nn.Module] = None):
         self.config = config
         self.logger = getLogger(self.config.name)
 
         self.device = self.get_device()
 
-        self.model = DeepNetModel(self.config.input_feature_dimensions)
+        if model is None:
+            self.model = DeepNetModel(self.config.input_feature_dimensions)
+        else:
+            self.model = model
         self.to_device()
 
     def to_device(self):
@@ -149,6 +153,7 @@ class WinRateModel:
             batch_size=self.config.training_batch_size,
             shuffle=True,
             num_workers=4,
+            drop_last=True,
         )
 
         if validation:
@@ -158,6 +163,7 @@ class WinRateModel:
                 dataset=val_dataset,
                 batch_size=self.config.validation_batch_size,
                 shuffle=True,
+                drop_last=True,
             )
 
         min_val_loss = float("inf")
@@ -174,8 +180,7 @@ class WinRateModel:
 
         for epoch in range(self.config.epochs):
             for batch_num, (batch_X, batch_y) in enumerate(train_loader):
-
-                pred = self.model(batch_X.to(self.device))
+                pred = self.model(batch_X.to(self.device)).flatten()
 
                 loss = loss_func(pred, batch_y.to(self.device))
                 loss_history.append(loss.item())
@@ -191,7 +196,7 @@ class WinRateModel:
 
                     with torch.no_grad():
                         for val_i, (batch_val_X, batch_val_y) in enumerate(val_loader):
-                            pred = self.model(batch_val_X.to(self.device))
+                            pred = self.model(batch_val_X.to(self.device)).flatten()
 
                             val_loss += loss_func(pred, batch_val_y.to(self.device))
                             val_dim += 1
@@ -273,7 +278,7 @@ class WinRateModel:
             for batch_X in test_loader:
                 preds = self.model(batch_X[0].to(self.device))
                 # preds = torch.sigmoid(preds) > 0.0  # binary classification
-                preds = (preds > 0.5).float()
+                preds = (torch.sigmoid(preds) > 0.5).float()
                 predictions.append(preds.detach().cpu().numpy())
 
         return np.concatenate(predictions)

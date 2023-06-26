@@ -58,7 +58,6 @@ class BasicDraft(Game):
         self.reward_model = reward_model
 
         self.draft_array_to_string_mapping = {-1: "1", 0: "X", 1: "0"}
-        self.draft_array_to_string_vect = np.vectorize(self.draft_array_to_string_mapping.get)
 
     def _draft_array_to_string(self, draft_array: np.ndarray) -> str:
         """Converts the np.array of draft data into a string for hashing/storing state info.
@@ -69,9 +68,7 @@ class BasicDraft(Game):
         Returns:
             str: string object for draft state storage
         """
-        mapped_array = self.draft_array_to_string_vect(draft_array)
-
-        return "".join(mapped_array)
+        return "".join([self.draft_array_to_string_mapping[_x] for _x in draft_array])
 
     def get_string_representation(self, state: DraftState) -> str:
         """Convert draft state to string representation.

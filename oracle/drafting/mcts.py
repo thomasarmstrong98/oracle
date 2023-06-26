@@ -12,7 +12,7 @@ from oracle.drafting.game import DraftState, Game
 EPS = 1e-8
 
 
-def random_policy(game: Game, draft_state: DraftState) -> np.ndarray:
+def random_policy(game: Game, state: DraftState) -> np.ndarray:
     """Random rollout policy
 
     Args:
@@ -21,7 +21,11 @@ def random_policy(game: Game, draft_state: DraftState) -> np.ndarray:
     Returns:
         np.ndarray: Output policy
     """
-    return np.ones(game.get_action_size()) / game.get_action_size()
+    uniform = np.ones(game.get_action_size()) / game.get_action_size()
+    valid_actions = game.get_valid_actions(state)
+    uniform = uniform * valid_actions
+    norm = np.sum(uniform)
+    return uniform / norm
 
 
 class BaseMCTS(ABC):
@@ -152,8 +156,14 @@ class BaseMCTS(ABC):
 
     def reset(self) -> None:
         """Hard reset the data stored in the tree"""
-        empty_dict = dict()
-        self.set_data(*([empty_dict] * 6))
+
+        self.__init__(
+            drafting_game=self.game,
+            search_stop_criterion=self.search_stop_criterion,
+            search_time_threshold_seconds=self.search_stop_threshold,
+            search_number_of_simulations=self.search_stop_threshold,
+            cpuct=self.cpuct,
+        )
 
     def set_data(
         self,
@@ -236,19 +246,14 @@ class ClassicMCTS(BaseMCTS):
         if s not in self.Ps:
             # leaf node of game tree, perform rollout
 
-            # the drafting game is a strict tree, rather than a DAG
+            # the drafting game is a strict tree, rather than a cyclic graph
             # this means once we get to an unvisited leaf, all
             # following states are also unvisited and thus our
             # flag for performing rollout or UCT is just self.Ps
 
             # get rollout policy from state
             self.Ps[s] = self.rollout_policy(self.game, current_draft)
-            valid_actions = self.game.get_valid_actions(current_draft)
-            self.Ps[s] = self.Ps[s] * valid_actions
-            norm = np.sum(self.Ps[s])
-            self.Ps[s] /= norm
-
-            self.Cs[s] = valid_actions
+            self.Cs[s] = self.game.get_valid_actions(current_draft)
             self.Ns[s] = 0  # leaf node has been visited
 
             action = np.random.choice(len(self.Ps[s]), p=self.Ps[s])
@@ -352,7 +357,6 @@ class AggregatorClassicMCTS:
     def run(
         self, start_node: Optional[DraftState] = None, return_action_policy: Optional[bool] = False
     ) -> Optional[np.ndarray]:
-
         if start_node is None:
             start_node = self.tree_params["drafting_game"].get_start_node()
 
@@ -372,7 +376,7 @@ class AggregatorClassicMCTS:
         This is used for long self-play runs, when we can't store all history in memory
 
         TODO - to avoid this problem, we can store the base tree data on disk
-        if the write/load is quick
+        if the write/load is quick enough
         """
         self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
         self.base_tree = ClassicMCTS(**self.tree_params)

@@ -58,11 +58,11 @@ def save_examples_locally(
 
 
 def main(
-    number_of_self_play_rounds: int = 50,
+    number_of_self_play_rounds: int = 100,
     tree_reset_interval: int = 10,
-    number_of_parrallel_trees: int = 8,
-    number_of_processes: int = 10,
-    time_limit_per_tree_seconds: int = 15,
+    number_of_parrallel_trees: int = 4,
+    number_of_processes: int = 4,
+    time_limit_per_tree_seconds: int = 10,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     examples = list()
 

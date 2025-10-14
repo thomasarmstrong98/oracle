@@ -61,5 +61,11 @@ prototyping/
 # profiling files
 *.prof
 
+# TensorBoard logs
+runs/
+
+# Checkpoints
+checkpoints/
+
 # extra vscode stuff
 .vscode/

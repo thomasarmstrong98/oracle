@@ -1,38 +1,18 @@
-"""Configure logging"""
+"""Simple logging configuration."""
+
 import logging
-from logging.config import dictConfig
-
-logging_config = dict(
-    version=1,
-    formatters={"f": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}},
-    handlers={
-        "h": {
-            "class": "logging.StreamHandler",
-            "formatter": "f",
-            "level": logging.DEBUG,
-        }
-    },
-    loggers={
-        "": {  # root logger
-            "handlers": ["h"],
-            "level": logging.DEBUG,
-        },
-        "__main__": {  # if __name__ == '__main__'
-            "handlers": ["h"],
-            "level": "DEBUG",
-            "propagate": False,
-        },
-    },
-)
 
 
-def getLogger(name: str) -> logging.Logger:
-    """Returns a logger named accordingly
-    Args:
-        name (str): name of logger
-    Returns:
-        logging.Logger: logger with specified format
-    """
-    dictConfig(logging_config)
+def getLogger(name: str, level: int = logging.INFO) -> logging.Logger:
+    """Create a configured logger."""
     logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        )
+        logger.addHandler(handler)
+
     return logger

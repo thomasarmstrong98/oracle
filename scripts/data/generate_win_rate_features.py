@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
-from oracle.utils.load import get_raw_draft_data, get_opendota_hero_embedding
-from oracle.utils.data import create_draft, DATA_DIRECTORY
+from oracle.utils.data import DATA_DIRECTORY, create_draft, get_opendota_hero_embedding
+from oracle.utils.load import get_opendota_hero_embedding, get_raw_draft_data
 from oracle.win_rate.features import BasicFeatureGenerator
 
 DEFAULT_PATH_TO_FILES = DATA_DIRECTORY / "win_rate_dataset"

@@ -1,9 +1,10 @@
-"""Monte Carlo Tree Search"""
+"""Monte Carlo Tree Search implementations."""
+
 import math
 import time
 from abc import ABC, abstractmethod
-from multiprocessing import Pool
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -13,19 +14,11 @@ EPS = 1e-8
 
 
 def random_policy(game: Game, state: DraftState) -> np.ndarray:
-    """Random rollout policy
-
-    Args:
-        draft_state (DraftState): Current draft state
-
-    Returns:
-        np.ndarray: Output policy
-    """
+    """Uniform random policy over valid actions."""
     uniform = np.ones(game.get_action_size()) / game.get_action_size()
     valid_actions = game.get_valid_actions(state)
     uniform = uniform * valid_actions
-    norm = np.sum(uniform)
-    return uniform / norm
+    return uniform / np.sum(uniform)
 
 
 class BaseMCTS(ABC):
@@ -37,34 +30,22 @@ class BaseMCTS(ABC):
         search_number_of_simulations: int = 1_000,
         cpuct: float = 0.1,
     ) -> None:
-        """Initialise MCTS Algorithm
-
-        Args:
-            drafting_game (Game): Game to search
-            search_stop_criterion (str, optional): Whether to use time of number of simulations. Defaults to "time".
-            search_time_threshold_seconds (int, optional): Defaults to 60*3.
-            search_number_of_simulations (int, optional): Defaults to 1_000.
-            cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
-        """
-
         self.search_stop_criterion = search_stop_criterion
         self.search_stop_threshold = (
             search_time_threshold_seconds
             if self.search_stop_criterion == "time"
             else search_number_of_simulations
         )
-
         self.game = drafting_game
         self.cpuct = cpuct
 
-        # data from graph exploring
-        self.Qsa = dict()  # Q values for each (state, action)
-        self.Nsa = dict()  # num. times (state, action) visited
-        self.Ns = dict()  # num. times state was visited
-        self.Ps = dict()  # store initial policy
-
-        self.Es = dict()  # stores if a state is ended for states
-        self.Cs = dict()  # stores children states for each state
+        # Tree search state
+        self.Qsa: dict[tuple[str, int], float] = {}
+        self.Nsa: dict[tuple[str, int], int] = {}
+        self.Ns: dict[str, int] = {}
+        self.Ps: dict[str, np.ndarray] = {}
+        self.Es: dict[str, float] = {}
+        self.Cs: dict[str, np.ndarray] = {}
 
     def run(
         self, start_node: Optional[DraftState] = None, return_action_policy: Optional[bool] = True
@@ -299,144 +280,6 @@ class ClassicMCTS(BaseMCTS):
         return -v
 
 
-def multiprocess_helper_function(mcts: ClassicMCTS, start_node: DraftState) -> ClassicMCTS:
-    """Helper class used for multiprocessing to avoid lambda functions
-
-    Args:
-        mcts (ClassicMCTS): tree search algorithm
-        start_node (DraftState): Node to start search from
-
-    Returns:
-        ClassicMCTS: tree search algorithm post search
-    """
-    _ = mcts.run(start_node)
-    return mcts
-
-
-class AggregatorClassicMCTS:
-    """Class for aggregating multiple multiprocessed MCTS runs."""
-
-    def __init__(
-        self,
-        drafting_game: Game,
-        parrallel_trees: int,
-        number_processes: int,
-        rollout_policy: Callable[[Game, DraftState], np.ndarray],
-        search_stop_criterion: str = "time",
-        search_time_threshold_seconds: int = 60 * 1,
-        search_number_of_simulations: int = 1_000,
-        cpuct: float = 0.1,
-    ) -> None:
-        """Initialise Classic MCTS Algorithm
-
-        Args:
-            drafting_game (Game): Game to search
-            rollout_policy (Callable[[DraftState], np.ndarray]): Rollout policy for simulation
-            number_processes (int): Number of processes to spawn for parrallel tree search.
-            search_stop_criterion (str, optional): Whether to use time of number of simulations. Defaults to "time".
-            search_time_threshold_seconds (int, optional): Defaults to 60*3.
-            search_number_of_simulations (int, optional): Defaults to 1_000.
-            cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
-        """
-        self.parrallel_trees = parrallel_trees
-        self.number_processes = number_processes
-        self.tree_params = {
-            "drafting_game": drafting_game,
-            "rollout_policy": rollout_policy,
-            "search_stop_criterion": search_stop_criterion,
-            "search_time_threshold_seconds": search_time_threshold_seconds,
-            "search_number_of_simulations": search_number_of_simulations,
-            "cpuct": cpuct,
-        }
-
-        self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
-
-        # define a base tree, so that the aggregator can expose the same functionality.
-        self.base_tree = ClassicMCTS(**self.tree_params)
-
-    def run(
-        self, start_node: Optional[DraftState] = None, return_action_policy: Optional[bool] = False
-    ) -> Optional[np.ndarray]:
-        if start_node is None:
-            start_node = self.tree_params["drafting_game"].get_start_node()
-
-        with Pool(self.number_processes) as pool:
-            searched_trees = pool.starmap(
-                multiprocess_helper_function, zip(self.trees, [start_node] * len(self.trees))
-            )
-
-        self.merge_trees(searched_trees)
-
-        if return_action_policy and start_node is not None:
-            return self.base_tree.get_action_policy(state=start_node)
-
-    def reset(self):
-        """Hard reset the class
-
-        This is used for long self-play runs, when we can't store all history in memory
-
-        TODO - to avoid this problem, we can store the base tree data on disk
-        if the write/load is quick enough
-        """
-        self.trees = [ClassicMCTS(**self.tree_params) for _ in range(self.parrallel_trees)]
-        self.base_tree = ClassicMCTS(**self.tree_params)
-
-    def merge_trees(self, searched_trees: List[ClassicMCTS]) -> None:
-        """Merge data from independent tree searches into the large base tree
-
-        Very unperformant code, and the merging takes a while, but the speed up with maxing out
-        all cores is worth it.
-
-        Args:
-            searched_trees (List[ClassicMCTS]): list of trees, having partially searched
-            state space
-        """
-
-        state_action_superset = set.union(*[set(tree.Qsa.keys()) for tree in searched_trees])
-        state_superset = set.union(*[set(tree.Ns.keys()) for tree in searched_trees])
-
-        for state_action in state_action_superset:
-            if state_action not in self.base_tree.Qsa:
-                self.base_tree.Qsa[state_action], self.base_tree.Nsa[state_action] = 0, 0
-            for tree in searched_trees:
-                if state_action in tree.Qsa:
-                    self.base_tree.Qsa[state_action] = (
-                        self.base_tree.Qsa[state_action] * self.base_tree.Nsa[state_action]
-                        + tree.Qsa[state_action] * tree.Nsa[state_action]
-                    ) / (tree.Nsa[state_action] + self.base_tree.Nsa[state_action])
-                    self.base_tree.Nsa[state_action] += tree.Nsa[state_action]
-
-        for state in state_superset:
-            if state not in self.base_tree.Ns:
-                (
-                    self.base_tree.Ns[state],
-                    self.base_tree.Es[state],
-                    self.base_tree.Cs[state],
-                    self.base_tree.Ps[state],
-                ) = (
-                    0,
-                    0,
-                    np.zeros(self.tree_params["drafting_game"].get_action_size()),
-                    np.zeros(self.tree_params["drafting_game"].get_action_size()),
-                )
-
-            for tree in searched_trees:
-                if state in tree.Ns:
-                    self.base_tree.Es[state] = (
-                        self.base_tree.Es[state] * self.base_tree.Ns[state]
-                        + tree.Es[state] * tree.Ns[state]
-                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
-                    self.base_tree.Cs[state] = (
-                        self.base_tree.Cs[state] * self.base_tree.Ns[state]
-                        + tree.Cs[state] * tree.Ns[state]
-                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
-                    self.base_tree.Ps[state] = (
-                        self.base_tree.Ps[state] * self.base_tree.Ns[state]
-                        + tree.Ps[state] * tree.Ns[state]
-                    ) / (self.base_tree.Ns[state] + tree.Ns[state] + 1)
-                    self.base_tree.Ns[state] += tree.Ns[state]
-
-
 class AlphaZeroMCTS(BaseMCTS):
     def __init__(
         self,
@@ -446,6 +289,9 @@ class AlphaZeroMCTS(BaseMCTS):
         search_time_threshold_seconds: int = 60 * 1,
         search_number_of_simulations: int = 1000,
         cpuct: float = 0.1,
+        dirichlet_alpha: float = 0.3,
+        dirichlet_epsilon: float = 0.25,
+        temperature: float = 1.0,
     ) -> None:
         """Initialise AlphaZero MCTS Algorithm
 
@@ -456,6 +302,9 @@ class AlphaZeroMCTS(BaseMCTS):
             search_time_threshold_seconds (int, optional): Defaults to 60*3.
             search_number_of_simulations (int, optional): Defaults to 1_000.
             cpuct (float, optional): UCT Exploration parameter. Defaults to 0.1.
+            dirichlet_alpha (float, optional): Dirichlet noise parameter for exploration. Defaults to 0.3.
+            dirichlet_epsilon (float, optional): Weight of Dirichlet noise at root. Defaults to 0.25.
+            temperature (float, optional): Temperature for action selection. Defaults to 1.0.
         """
         super().__init__(
             drafting_game,
@@ -466,6 +315,10 @@ class AlphaZeroMCTS(BaseMCTS):
         )
 
         self.game_net = game_net
+        self.dirichlet_alpha = dirichlet_alpha
+        self.dirichlet_epsilon = dirichlet_epsilon
+        self.temperature = temperature
+        self.root_state = None  # Track root for Dirichlet noise
 
     def search(self, current_draft: DraftState) -> float:
         """Perform a single tree exploration with neural net policy/value from current state.
@@ -500,6 +353,16 @@ class AlphaZeroMCTS(BaseMCTS):
             self.Ps[s] = self.Ps[s] * valid_actions
             norm = np.sum(self.Ps[s])
             self.Ps[s] /= norm
+
+            # Apply Dirichlet noise at root for exploration (AlphaZero paper)
+            if self.root_state is not None and s == self.game.get_string_representation(self.root_state):
+                num_valid = int(valid_actions.sum())
+                if num_valid > 1:  # Only add noise if there are multiple valid actions
+                    noise = np.random.dirichlet([self.dirichlet_alpha] * num_valid)
+                    noise_full = np.zeros_like(self.Ps[s])
+                    noise_full[valid_actions == 1] = noise
+                    self.Ps[s] = (1 - self.dirichlet_epsilon) * self.Ps[s] + self.dirichlet_epsilon * noise_full
+                    self.Ps[s] /= np.sum(self.Ps[s])  # Renormalize
 
             self.Cs[s] = valid_actions
             self.Ns[s] = 0  # leaf node has been visited
@@ -541,3 +404,102 @@ class AlphaZeroMCTS(BaseMCTS):
 
         self.Ns[s] += 1
         return -v
+
+    def run(
+        self, start_node: Optional[DraftState] = None, return_action_policy: Optional[bool] = True
+    ) -> Optional[np.ndarray]:
+        """Run MCTS simulations from start node with optional Dirichlet noise at root.
+
+        Args:
+            start_node: Start node for simulations
+            return_action_policy: Whether to return probability move vector
+
+        Returns:
+            Action policy if return_action_policy is True
+        """
+        if start_node is None:
+            start_node = self.game.get_start_node()
+
+        # Set root state for Dirichlet noise application
+        self.root_state = start_node
+
+        if self.search_stop_criterion == "time":
+            timeLimit = time.time() + self.search_stop_threshold
+            while time.time() < timeLimit:
+                self.search(start_node)
+        else:
+            for _ in range(self.search_stop_threshold):
+                self.search(start_node)
+
+        if return_action_policy:
+            return self.get_action_policy(start_node)
+
+    def get_action_policy(self, state: DraftState) -> np.ndarray:
+        """Returns action probabilities with temperature scaling.
+
+        Args:
+            state: Start node
+
+        Returns:
+            Vector of action probabilities
+        """
+        s = self.game.get_string_representation(state)
+        counts = np.asarray(
+            [
+                self.Nsa[(s, a)] if (s, a) in self.Nsa else 0
+                for a in range(self.game.get_action_size())
+            ]
+        )
+
+        if self.temperature == 0:
+            # Deterministic: choose best action
+            policy = np.zeros_like(counts)
+            policy[np.argmax(counts)] = 1.0
+            return policy
+        elif self.temperature == float('inf'):
+            # Uniform over visited actions
+            policy = (counts > 0).astype(float)
+            return policy / np.sum(policy)
+        else:
+            # Temperature scaling: counts^(1/temp)
+            counts = counts.astype(float)
+            counts = np.power(counts, 1.0 / self.temperature)
+            return counts / np.sum(counts)
+
+    def get_tree_statistics(self, state: DraftState) -> dict:
+        """Get statistics about the search tree from a state.
+
+        Args:
+            state: State to analyze
+
+        Returns:
+            Dictionary with tree statistics
+        """
+        s = self.game.get_string_representation(state)
+
+        if s not in self.Ns:
+            return {'visits': 0, 'children': 0}
+
+        # Count children (visited actions)
+        children = []
+        valid_actions = self.Cs[s] if s in self.Cs else self.game.get_valid_actions(state)
+
+        for a in range(self.game.get_action_size()):
+            if valid_actions[a] and (s, a) in self.Nsa:
+                children.append({
+                    'action': a,
+                    'visits': self.Nsa[(s, a)],
+                    'value': self.Qsa[(s, a)] if (s, a) in self.Qsa else 0.0,
+                    'policy_prior': self.Ps[s][a] if s in self.Ps else 0.0,
+                })
+
+        # Sort by visits
+        children.sort(key=lambda x: x['visits'], reverse=True)
+
+        return {
+            'visits': self.Ns[s],
+            'num_children': len(children),
+            'children': children[:10],  # Top 10 children
+            'value_estimates': [c['value'] for c in children[:5]],
+            'visit_distribution': [c['visits'] for c in children[:5]],
+        }
